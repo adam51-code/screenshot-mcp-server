@@ -8,6 +8,6 @@
     "deploy": "npx wrangler deploy"
   },
   "dependencies": {
-    "@cloudflare/puppeteer": "^0.0.22"
+    "@cloudflare/puppeteer": "^1.3.0"
   }
 }
