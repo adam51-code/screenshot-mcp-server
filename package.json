@@ -1,7 +1,7 @@
 {
   "name": "screenshot-mcp-server",
   "version": "1.0.0",
-  "description": "MCP server for capturing web page screenshots via Cloudflare Browser Run + Puppeteer",
+  "description": "MCP server for capturing web page screenshots via Cloudflare Browser Run + Puppeteer + Stagehand",
   "main": "src/index.js",
   "scripts": {
     "dev": "npx wrangler dev",
@@ -11,7 +11,7 @@
     "@browserbasehq/stagehand": "2.5.x",
     "@cloudflare/playwright": "^1.2.0",
     "@cloudflare/puppeteer": "^1.3.0",
-    "zod": "^3.25.76",
+    "zod": "3.25.67",
     "zod-to-json-schema": "^3.24.6"
   }
 }
