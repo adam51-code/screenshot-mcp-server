@@ -3,7 +3,7 @@ import { Stagehand } from "@browserbasehq/stagehand";
 import { endpointURLString } from "@cloudflare/playwright";
 import { WorkersAIClient } from "./workersAIClient";
 
-const SERVER_INFO = { name: "screenshot-api", version: "1.2.0" };
+const SERVER_INFO = { name: "screenshot-api", version: "1.3.0" };
 const PROTOCOL_VERSION = "2024-11-05";
 
 const TOOLS = [
@@ -158,41 +158,23 @@ async function captureAnnotated(env, opts) {
     if (opts.scrollToSelector) await page.evaluate((sel) => { const el = document.querySelector(sel); if (el) el.scrollIntoView({ block: "center" }); }, opts.scrollToSelector);
     await sleep(opts.delayMs);
 
-    const annotationResult = await page.evaluate((selectors, caption, padding) => {
-      const RED = "rgb(217, 48, 37)";
-      const found = [];
-      const overlay = document.createElement("div");
-      overlay.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:999999;";
-      document.body.appendChild(overlay);
-      let lowestBottom = 0, leftmostLeft = Infinity, rightmostRight = 0;
+    const count = await page.evaluate((selectors, padding) => {
+      let found = 0;
       for (const sel of selectors) {
         document.querySelectorAll(sel).forEach((el) => {
-          const rect = el.getBoundingClientRect();
-          const box = document.createElement("div");
-          box.style.cssText = `position:absolute;top:${rect.top+window.scrollY-padding}px;left:${rect.left+window.scrollX-padding}px;width:${rect.width+padding*2}px;height:${rect.height+padding*2}px;border:4px solid ${RED};border-radius:8px;pointer-events:none;box-sizing:border-box;`;
-          overlay.appendChild(box);
-          const bottom = rect.top+window.scrollY+rect.height+padding;
-          if (bottom > lowestBottom) lowestBottom = bottom;
-          const left = rect.left+window.scrollX-padding;
-          if (left < leftmostLeft) leftmostLeft = left;
-          const right = rect.left+window.scrollX+rect.width+padding;
-          if (right > rightmostRight) rightmostRight = right;
-          found.push(sel);
+          el.style.setProperty('outline', `4px solid rgb(217, 48, 37)`, 'important');
+          el.style.setProperty('outline-offset', `${padding}px`, 'important');
+          el.style.setProperty('box-shadow', '0 0 0 4px rgba(217, 48, 37, 0.3)', 'important');
+          found++;
         });
       }
-      if (caption && found.length > 0) {
-        const label = document.createElement("div");
-        label.style.cssText = `position:absolute;top:${lowestBottom+12}px;left:${leftmostLeft}px;width:${rightmostRight-leftmostLeft}px;color:${RED};font-family:Helvetica,Arial,sans-serif;font-size:16px;font-weight:700;text-align:center;pointer-events:none;text-shadow:0 1px 3px rgba(255,255,255,0.9);line-height:1.3;`;
-        label.textContent = caption;
-        overlay.appendChild(label);
-      }
-      return { found, count: found.length };
-    }, opts.selectors, opts.caption, opts.padding);
+      return found;
+    }, opts.selectors, opts.padding);
 
-    if (annotationResult.count === 0) return { content: [{ type: "text", text: `No elements found for selectors: ${opts.selectors.join(", ")}` }], isError: true };
+    if (count === 0) return { content: [{ type: "text", text: `No elements found for selectors: ${opts.selectors.join(", ")}` }], isError: true };
     await sleep(300);
     const buf = await page.screenshot({ type: "jpeg", quality: opts.quality, fullPage: false });
-    return await imageResult(env, buf, `Annotated: ${opts.url} (${annotationResult.count} elements highlighted)`);
+    return await imageResult(env, buf, `Annotated: ${opts.url} (${count} elements highlighted)`);
   } finally { await browser.close(); }
 }
 
@@ -206,7 +188,7 @@ async function captureAIAnnotated(env, opts) {
     await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await sleep(opts.delayMs);
 
-    const boxes = [];
+    const foundSelectors = [];
     const seenSelectors = new Set();
     const notFound = [];
     for (const description of opts.find) {
@@ -217,40 +199,44 @@ async function captureAIAnnotated(env, opts) {
         if (!selector || seenSelectors.has(selector)) continue;
         try {
           const box = await page.locator(selector).boundingBox();
-          if (box && box.width > 0 && box.height > 0) { boxes.push({ selector, ...box }); seenSelectors.add(selector); found = true; }
+          if (box && box.width > 0 && box.height > 0) { foundSelectors.push(selector); seenSelectors.add(selector); found = true; }
         } catch (_) {}
       }
       if (!found) notFound.push(description);
     }
 
-    if (boxes.length === 0) { const suffix = notFound.length ? `: ${notFound.join("; ")}` : ""; return { content: [{ type: "text", text: `No elements found for AI descriptions${suffix}` }], isError: true }; }
+    if (foundSelectors.length === 0) {
+      const suffix = notFound.length ? `: ${notFound.join("; ")}` : "";
+      return { content: [{ type: "text", text: `No elements found for AI descriptions${suffix}` }], isError: true };
+    }
 
-    await page.evaluate(({ boxes: foundBoxes, caption, padding }) => {
-      const RED = "rgb(217, 48, 37)";
-      const overlay = document.createElement("div");
-      overlay.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:999999;";
-      document.body.appendChild(overlay);
-      let lowestBottom = 0, leftmostLeft = Infinity, rightmostRight = 0;
-      for (const f of foundBoxes) {
-        const box = document.createElement("div");
-        const left = f.x+window.scrollX-padding, top = f.y+window.scrollY-padding, width = f.width+padding*2, height = f.height+padding*2;
-        box.style.cssText = `position:absolute;top:${top}px;left:${left}px;width:${width}px;height:${height}px;border:4px solid ${RED};border-radius:8px;pointer-events:none;box-sizing:border-box;`;
-        overlay.appendChild(box);
-        if (top+height > lowestBottom) lowestBottom = top+height;
-        if (left < leftmostLeft) leftmostLeft = left;
-        if (left+width > rightmostRight) rightmostRight = left+width;
+    // Apply outline+box-shadow directly to elements (works through any z-index)
+    await page.evaluate(({ selectors, caption, padding }) => {
+      let count = 0;
+      for (const sel of selectors) {
+        try {
+          const el = document.querySelector(sel);
+          if (el) {
+            el.style.setProperty('outline', '4px solid rgb(217, 48, 37)', 'important');
+            el.style.setProperty('outline-offset', padding + 'px', 'important');
+            el.style.setProperty('box-shadow', '0 0 12px 4px rgba(217, 48, 37, 0.4)', 'important');
+            count++;
+          }
+        } catch (_) {}
       }
-      if (caption) {
-        const label = document.createElement("div");
-        label.style.cssText = `position:absolute;top:${lowestBottom+12}px;left:${leftmostLeft}px;width:${rightmostRight-leftmostLeft}px;color:${RED};font-family:Helvetica,Arial,sans-serif;font-size:16px;font-weight:700;text-align:center;pointer-events:none;text-shadow:0 1px 3px rgba(255,255,255,0.9);line-height:1.3;`;
-        label.textContent = caption;
-        overlay.appendChild(label);
-      }
-    }, { boxes, caption: opts.caption, padding: opts.padding });
 
-    await sleep(300);
+      // Add caption as a fixed banner at the bottom of the viewport
+      if (caption && count > 0) {
+        const banner = document.createElement('div');
+        banner.textContent = caption;
+        banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgb(217,48,37);color:white;font-family:Helvetica,Arial,sans-serif;font-size:18px;font-weight:700;text-align:center;padding:12px 20px;z-index:2147483647;letter-spacing:0.5px;';
+        document.body.appendChild(banner);
+      }
+    }, { selectors: foundSelectors, caption: opts.caption, padding: opts.padding });
+
+    await sleep(500);
     const buf = await page.screenshot({ type: "jpeg", quality: opts.quality, fullPage: false });
-    return await imageResult(env, buf, `AI annotated: ${opts.url} (${boxes.length} elements highlighted)`);
+    return await imageResult(env, buf, `AI annotated: ${opts.url} (${foundSelectors.length} elements highlighted)`);
   } finally { if (stagehand) await stagehand.close(); }
 }
 
@@ -311,8 +297,6 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/health") return Response.json({ status: "ok", tools: TOOLS.length });
-
-    // Serve screenshots from R2
     if (request.method === "GET" && url.pathname.startsWith("/img/")) {
       if (!env.SCREENSHOTS) return new Response("R2 not configured", { status: 500 });
       const key = url.pathname.slice(1);
@@ -323,13 +307,11 @@ export default {
       headers.set("Cache-Control", "public, max-age=31536000");
       return new Response(object.body, { headers });
     }
-
     if (request.method === "OPTIONS") return new Response(null, { headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id" } });
     if (env.MCP_AUTH_TOKEN) { const auth = request.headers.get("Authorization"); if (auth !== `Bearer ${env.MCP_AUTH_TOKEN}`) return new Response("Unauthorized", { status: 401 }); }
     if (!url.pathname.startsWith("/mcp")) return new Response("Not found", { status: 404 });
     if (request.method === "GET") return new Response("Use POST", { status: 405 });
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
-
     let body;
     try { body = await request.json(); } catch { return Response.json(jsonrpcError(null, -32700, "Parse error"), { status: 400 }); }
     const headers = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
