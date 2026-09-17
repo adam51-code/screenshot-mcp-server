@@ -1,50 +1,63 @@
 import puppeteer from "@cloudflare/puppeteer";
 
+const SERVER_INFO = { name: "screenshot-api", version: "1.0.0" };
+const PROTOCOL_VERSION = "2024-11-05";
+
 // --- TOOLS ---
-const TOOLS = {
-  screenshot_api__capture: {
-    description:
-      "Take a viewport screenshot of a web page. Returns a JPEG image as base64. Default viewport is 1440x900 (desktop). Supports full-page capture, waiting for elements, scrolling to elements, and cookie banner dismissal.",
-    params: {
-      url: { type: "string", description: "The URL to screenshot", required: true },
-      width: { type: "number", description: "Viewport width in pixels (default: 1440)", required: false },
-      height: { type: "number", description: "Viewport height in pixels (default: 900)", required: false },
-      full_page: { type: "boolean", description: "Capture the full scrollable page instead of just the viewport (default: false)", required: false },
-      wait_for_selector: { type: "string", description: "CSS selector to wait for before capturing", required: false },
-      scroll_to_selector: { type: "string", description: "CSS selector to scroll into view before capturing", required: false },
-      delay_ms: { type: "number", description: "Additional delay in ms after page load before capturing (default: 2500)", required: false },
-      dismiss_cookies: { type: "boolean", description: "Attempt to dismiss cookie consent banners before capturing (default: true)", required: false },
-      quality: { type: "number", description: "JPEG quality 1-100 (default: 85)", required: false },
+const TOOLS = [
+  {
+    name: "screenshot_api__capture",
+    description: "Take a viewport screenshot of a web page. Returns a JPEG image as base64. Default viewport is 1440x900 (desktop). Supports full-page capture, waiting for elements, scrolling to elements, and cookie banner dismissal.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The URL to screenshot" },
+        width: { type: "number", description: "Viewport width in pixels (default: 1440)" },
+        height: { type: "number", description: "Viewport height in pixels (default: 900)" },
+        full_page: { type: "boolean", description: "Capture the full scrollable page instead of just the viewport (default: false)" },
+        wait_for_selector: { type: "string", description: "CSS selector to wait for before capturing" },
+        scroll_to_selector: { type: "string", description: "CSS selector to scroll into view before capturing" },
+        delay_ms: { type: "number", description: "Additional delay in ms after page load before capturing (default: 2500)" },
+        dismiss_cookies: { type: "boolean", description: "Attempt to dismiss cookie consent banners before capturing (default: true)" },
+        quality: { type: "number", description: "JPEG quality 1-100 (default: 85)" },
+      },
+      required: ["url"],
     },
   },
-
-  screenshot_api__capture_element: {
-    description:
-      "Screenshot a specific element on a web page by CSS selector. Returns a tightly cropped JPEG of just that element. Useful for capturing a specific form, CTA, hero section, or offer banner.",
-    params: {
-      url: { type: "string", description: "The URL containing the element", required: true },
-      selector: { type: "string", description: "CSS selector of the element to capture", required: true },
-      width: { type: "number", description: "Viewport width in pixels (default: 1440)", required: false },
-      height: { type: "number", description: "Viewport height in pixels (default: 900)", required: false },
-      delay_ms: { type: "number", description: "Additional delay in ms after page load (default: 2500)", required: false },
-      quality: { type: "number", description: "JPEG quality 1-100 (default: 85)", required: false },
+  {
+    name: "screenshot_api__capture_element",
+    description: "Screenshot a specific element on a web page by CSS selector. Returns a tightly cropped JPEG of just that element. Useful for capturing a specific form, CTA, hero section, or offer banner.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The URL containing the element" },
+        selector: { type: "string", description: "CSS selector of the element to capture" },
+        width: { type: "number", description: "Viewport width in pixels (default: 1440)" },
+        height: { type: "number", description: "Viewport height in pixels (default: 900)" },
+        delay_ms: { type: "number", description: "Additional delay in ms after page load (default: 2500)" },
+        quality: { type: "number", description: "JPEG quality 1-100 (default: 85)" },
+      },
+      required: ["url", "selector"],
     },
   },
-
-  screenshot_api__capture_mobile: {
-    description:
-      "Take a mobile viewport screenshot at 375x812 (iPhone-sized) with 2x device scale factor. Convenience shortcut for mobile-first analysis. Returns a JPEG image as base64.",
-    params: {
-      url: { type: "string", description: "The URL to screenshot", required: true },
-      full_page: { type: "boolean", description: "Capture the full scrollable page (default: false)", required: false },
-      wait_for_selector: { type: "string", description: "CSS selector to wait for before capturing", required: false },
-      scroll_to_selector: { type: "string", description: "CSS selector to scroll into view before capturing", required: false },
-      delay_ms: { type: "number", description: "Additional delay in ms after page load (default: 2500)", required: false },
-      dismiss_cookies: { type: "boolean", description: "Attempt to dismiss cookie consent banners (default: true)", required: false },
-      quality: { type: "number", description: "JPEG quality 1-100 (default: 85)", required: false },
+  {
+    name: "screenshot_api__capture_mobile",
+    description: "Take a mobile viewport screenshot at 375x812 (iPhone-sized) with 2x device scale factor. Convenience shortcut for mobile-first analysis. Returns a JPEG image as base64.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The URL to screenshot" },
+        full_page: { type: "boolean", description: "Capture the full scrollable page (default: false)" },
+        wait_for_selector: { type: "string", description: "CSS selector to wait for before capturing" },
+        scroll_to_selector: { type: "string", description: "CSS selector to scroll into view before capturing" },
+        delay_ms: { type: "number", description: "Additional delay in ms after page load (default: 2500)" },
+        dismiss_cookies: { type: "boolean", description: "Attempt to dismiss cookie consent banners (default: true)" },
+        quality: { type: "number", description: "JPEG quality 1-100 (default: 85)" },
+      },
+      required: ["url"],
     },
   },
-};
+];
 
 // --- EXECUTE TOOL ---
 async function executeTool(env, name, args) {
@@ -112,7 +125,6 @@ async function captureScreenshot(env, opts) {
       await page.waitForSelector(opts.waitForSelector, { timeout: 10000 }).catch(() => {});
     }
 
-    // Scroll lazy-loaded content: walk down the page in 700px steps
     if (opts.fullPage) {
       await autoScroll(page);
     }
@@ -235,88 +247,116 @@ function imageResult(buf, description) {
   };
 }
 
-// --- JSON-RPC ROUTER ---
-async function handleRpc(request, env) {
-  const body = await request.json();
-  const { method, params, id } = body;
+// --- MCP Protocol (JSON-RPC 2.0) ---
+function jsonrpc(id, result) {
+  return { jsonrpc: "2.0", id, result };
+}
 
-  if (method === "tools/list") {
-    const tools = Object.entries(TOOLS).map(([name, def]) => ({
-      name,
-      description: def.description,
-      inputSchema: {
-        type: "object",
-        properties: Object.fromEntries(
-          Object.entries(def.params).map(([k, v]) => [
-            k,
-            { type: v.type, description: v.description },
-          ])
-        ),
-        required: Object.entries(def.params)
-          .filter(([_, v]) => v.required)
-          .map(([k]) => k),
-      },
-    }));
-    return jsonResponse({ jsonrpc: "2.0", id, result: { tools } });
-  }
+function jsonrpcError(id, code, message) {
+  return { jsonrpc: "2.0", id, error: { code, message } };
+}
 
-  if (method === "tools/call") {
-    try {
-      const result = await executeTool(env, params?.name, params?.arguments || {});
-      return jsonResponse({ jsonrpc: "2.0", id, result });
-    } catch (err) {
-      return jsonResponse({
-        jsonrpc: "2.0",
-        id,
-        result: {
+async function handleRpc(env, req) {
+  const { method, params, id } = req;
+
+  switch (method) {
+    case "initialize":
+      return jsonrpc(id, {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: SERVER_INFO,
+      });
+
+    case "notifications/initialized":
+    case "notifications/cancelled":
+      return null;
+
+    case "ping":
+      return jsonrpc(id, {});
+
+    case "tools/list":
+      return jsonrpc(id, { tools: TOOLS });
+
+    case "tools/call": {
+      const { name, arguments: args } = params || {};
+      try {
+        const result = await executeTool(env, name, args);
+        return jsonrpc(id, result);
+      } catch (err) {
+        return jsonrpc(id, {
           content: [{ type: "text", text: `Error: ${err.message}` }],
           isError: true,
-        },
-      });
+        });
+      }
     }
+
+    default:
+      return jsonrpcError(id, -32601, `Method not found: ${method}`);
   }
-
-  return jsonResponse({
-    jsonrpc: "2.0",
-    id,
-    error: { code: -32601, message: `Method not found: ${method}` },
-  });
 }
 
-function jsonResponse(obj) {
-  return new Response(JSON.stringify(obj), {
-    headers: { "content-type": "application/json" },
-  });
-}
-
-// --- WORKER ENTRY ---
+// --- Worker entry ---
 export default {
   async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/health") {
+      return Response.json({ status: "ok", tools: TOOLS.length });
+    }
+
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id",
         },
       });
     }
 
-    const url = new URL(request.url);
-
-    if (url.pathname === "/health") {
-      return jsonResponse({ status: "ok", tools: Object.keys(TOOLS).length });
+    if (env.MCP_AUTH_TOKEN) {
+      const auth = request.headers.get("Authorization");
+      if (auth !== `Bearer ${env.MCP_AUTH_TOKEN}`) {
+        return new Response("Unauthorized", { status: 401 });
+      }
     }
 
-    const auth = request.headers.get("Authorization");
-    if (!auth || auth !== `Bearer ${env.MCP_AUTH_TOKEN}`) {
-      return jsonResponse({ error: "Unauthorized" }, 401);
+    if (!url.pathname.startsWith("/mcp")) {
+      return new Response("Not found", { status: 404 });
     }
 
-    if (url.pathname === "/mcp" && request.method === "POST") {
-      return handleRpc(request, env);
+    if (request.method === "GET") {
+      return new Response("Use POST for MCP requests", { status: 405 });
     }
 
-    return new Response("Not Found", { status: 404 });
+    if (request.method !== "POST") {
+      return new Response("Method not allowed", { status: 405 });
+    }
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return Response.json(jsonrpcError(null, -32700, "Parse error"), { status: 400 });
+    }
+
+    const headers = {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    };
+
+    if (Array.isArray(body)) {
+      const results = [];
+      for (const req of body) {
+        const res = await handleRpc(env, req);
+        if (res !== null) results.push(res);
+      }
+      if (results.length === 0) return new Response(null, { status: 202, headers });
+      return Response.json(results, { headers });
+    }
+
+    const result = await handleRpc(env, body);
+    if (result === null) return new Response(null, { status: 202, headers });
+    return Response.json(result, { headers });
   },
 };
