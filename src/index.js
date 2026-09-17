@@ -3,7 +3,7 @@ import { Stagehand } from "@browserbasehq/stagehand";
 import { endpointURLString } from "@cloudflare/playwright";
 import { WorkersAIClient } from "./workersAIClient";
 
-const SERVER_INFO = { name: "screenshot-api", version: "1.1.0" };
+const SERVER_INFO = { name: "screenshot-api", version: "1.2.0" };
 const PROTOCOL_VERSION = "2024-11-05";
 
 // --- TOOLS ---
@@ -376,7 +376,7 @@ async function captureAIAnnotated(env, opts) {
     const page = stagehand.page;
 
     await page.setViewportSize({ width: opts.width, height: opts.height });
-    await page.goto(opts.url, { waitUntil: "networkidle", timeout: 30000 });
+    await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await sleep(opts.delayMs);
 
     const boxes = [];
@@ -399,7 +399,6 @@ async function captureAIAnnotated(env, opts) {
             descriptionFound = true;
           }
         } catch (_) {
-          // An individual AI-generated selector can be stale; continue with other results.
         }
       }
 
