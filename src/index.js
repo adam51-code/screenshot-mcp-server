@@ -1,4 +1,7 @@
 import puppeteer from "@cloudflare/puppeteer";
+import { Stagehand } from "@browserbasehq/stagehand";
+import { endpointURLString } from "@cloudflare/playwright";
+import { WorkersAIClient } from "./workersAIClient";
 
 const SERVER_INFO = { name: "screenshot-api", version: "1.1.0" };
 const PROTOCOL_VERSION = "2024-11-05";
@@ -81,6 +84,28 @@ const TOOLS = [
       required: ["url", "selectors", "caption"],
     },
   },
+  {
+    name: "screenshot_api__ai_annotate",
+    description: "Use AI to find elements described in plain English, then take a screenshot with red rounded-rectangle overlays and a caption label. Returns an annotated JPEG image as base64.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The URL to screenshot" },
+        find: {
+          type: "array",
+          items: { type: "string" },
+          description: "Plain-English descriptions of elements to highlight, e.g. [\"the navigation bar at the top\", \"the Get Started button\"]",
+        },
+        caption: { type: "string", description: "Red caption text displayed below the highlights" },
+        width: { type: "number", description: "Viewport width in pixels (default: 1440)" },
+        height: { type: "number", description: "Viewport height in pixels (default: 900)" },
+        delay_ms: { type: "number", description: "Additional delay in ms after page load before finding and capturing (default: 3000)" },
+        quality: { type: "number", description: "JPEG quality 1-100 (default: 90)" },
+        padding: { type: "number", description: "Pixels of padding around each highlighted element (default: 8)" },
+      },
+      required: ["url", "find", "caption"],
+    },
+  },
 ];
 
 // --- EXECUTE TOOL ---
@@ -135,6 +160,18 @@ async function executeTool(env, name, args) {
         delayMs: args.delay_ms ?? 3000,
         dismissCookies: args.dismiss_cookies !== false,
         quality: args.quality || 90,
+        padding: args.padding ?? 8,
+      });
+
+    case "screenshot_api__ai_annotate":
+      return captureAIAnnotated(env, {
+        url: args.url,
+        find: args.find,
+        caption: args.caption,
+        width: args.width ?? 1440,
+        height: args.height ?? 900,
+        delayMs: args.delay_ms ?? 3000,
+        quality: args.quality ?? 90,
         padding: args.padding ?? 8,
       });
 
@@ -322,6 +359,128 @@ async function captureAnnotated(env, opts) {
     return imageResult(buf, `Annotated: ${opts.url} (${annotationResult.count} elements highlighted, caption: \"${opts.caption}\")`);
   } finally {
     await browser.close();
+  }
+}
+
+async function captureAIAnnotated(env, opts) {
+  let stagehand;
+  try {
+    stagehand = new Stagehand({
+      env: "LOCAL",
+      localBrowserLaunchOptions: { cdpUrl: endpointURLString(env.BROWSER) },
+      llmClient: new WorkersAIClient(env.AI),
+      verbose: 1,
+    });
+
+    await stagehand.init();
+    const page = stagehand.page;
+
+    await page.setViewportSize({ width: opts.width, height: opts.height });
+    await page.goto(opts.url, { waitUntil: "networkidle", timeout: 30000 });
+    await sleep(opts.delayMs);
+
+    const boxes = [];
+    const seenSelectors = new Set();
+    const notFound = [];
+
+    for (const description of opts.find) {
+      const actions = await page.observe(description);
+      let descriptionFound = false;
+
+      for (const action of actions || []) {
+        const selector = action?.selector;
+        if (!selector || seenSelectors.has(selector)) continue;
+
+        try {
+          const box = await page.locator(selector).boundingBox();
+          if (box && box.width > 0 && box.height > 0) {
+            boxes.push({ selector, ...box });
+            seenSelectors.add(selector);
+            descriptionFound = true;
+          }
+        } catch (_) {
+          // An individual AI-generated selector can be stale; continue with other results.
+        }
+      }
+
+      if (!descriptionFound) notFound.push(description);
+    }
+
+    if (boxes.length === 0) {
+      const suffix = notFound.length ? `: ${notFound.join("; ")}` : "";
+      return {
+        content: [{ type: "text", text: `No elements found for AI descriptions${suffix}` }],
+        isError: true,
+      };
+    }
+
+    const annotationResult = await page.evaluate(({ boxes: foundBoxes, caption, padding }) => {
+      const RED = "rgb(217, 48, 37)";
+      const overlay = document.createElement("div");
+      overlay.id = "mcp-ai-annotation-overlay";
+      overlay.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:999999;";
+      document.body.appendChild(overlay);
+
+      let lowestBottom = 0;
+      let leftmostLeft = Infinity;
+      let rightmostRight = 0;
+
+      for (const found of foundBoxes) {
+        const box = document.createElement("div");
+        const left = found.x + window.scrollX - padding;
+        const top = found.y + window.scrollY - padding;
+        const width = found.width + padding * 2;
+        const height = found.height + padding * 2;
+
+        box.style.cssText = [
+          "position:absolute",
+          `top:${top}px`,
+          `left:${left}px`,
+          `width:${width}px`,
+          `height:${height}px`,
+          `border:4px solid ${RED}`,
+          "border-radius:8px",
+          "pointer-events:none",
+          "box-sizing:border-box",
+        ].join(";");
+        overlay.appendChild(box);
+
+        const bottom = top + height;
+        if (bottom > lowestBottom) lowestBottom = bottom;
+        if (left < leftmostLeft) leftmostLeft = left;
+        const right = left + width;
+        if (right > rightmostRight) rightmostRight = right;
+      }
+
+      if (caption) {
+        const label = document.createElement("div");
+        const captionWidth = rightmostRight - leftmostLeft;
+        label.style.cssText = [
+          "position:absolute",
+          `top:${lowestBottom + 12}px`,
+          `left:${leftmostLeft}px`,
+          `width:${captionWidth}px`,
+          `color:${RED}`,
+          "font-family:Helvetica,Arial,sans-serif",
+          "font-size:16px",
+          "font-weight:700",
+          "text-align:center",
+          "pointer-events:none",
+          "text-shadow:0 1px 3px rgba(255,255,255,0.9)",
+          "line-height:1.3",
+        ].join(";");
+        label.textContent = caption;
+        overlay.appendChild(label);
+      }
+
+      return { count: foundBoxes.length };
+    }, { boxes, caption: opts.caption, padding: opts.padding });
+
+    await sleep(300);
+    const buf = await page.screenshot({ type: "jpeg", quality: opts.quality, fullPage: false });
+    return imageResult(buf, `AI annotated: ${opts.url} (${annotationResult.count} elements highlighted, caption: \"${opts.caption}\")`);
+  } finally {
+    if (stagehand) await stagehand.close();
   }
 }
 
