@@ -1,6 +1,6 @@
 import puppeteer from "@cloudflare/puppeteer";
 
-const SERVER_INFO = { name: "screenshot-api", version: "1.0.0" };
+const SERVER_INFO = { name: "screenshot-api", version: "1.1.0" };
 const PROTOCOL_VERSION = "2024-11-05";
 
 // --- TOOLS ---
@@ -57,6 +57,30 @@ const TOOLS = [
       required: ["url"],
     },
   },
+  {
+    name: "screenshot_api__annotate",
+    description: "Take a screenshot of a web page with annotation overlays: red rounded-rectangle outlines around specified elements and a caption label. Returns an annotated JPEG ready to use as a cold email proof image. Pass one or more CSS selectors to highlight, and a caption that states the finding in the prospect's own words.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The URL to screenshot and annotate" },
+        selectors: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of CSS selectors to highlight with red boxes. Each matched element gets a red rounded-rect outline.",
+        },
+        caption: { type: "string", description: "Caption text displayed below the highlighted area in red. States the finding, e.g. 'Expired 02/28/2025 - still live on every paid click'" },
+        width: { type: "number", description: "Viewport width in pixels (default: 1440)" },
+        height: { type: "number", description: "Viewport height in pixels (default: 900)" },
+        scroll_to_selector: { type: "string", description: "CSS selector to scroll into view before capturing (default: first selector in the selectors array)" },
+        delay_ms: { type: "number", description: "Additional delay in ms after page load before capturing (default: 3000)" },
+        dismiss_cookies: { type: "boolean", description: "Attempt to dismiss cookie consent banners before capturing (default: true)" },
+        quality: { type: "number", description: "JPEG quality 1-100 (default: 90)" },
+        padding: { type: "number", description: "Pixels of padding around each highlighted element (default: 8)" },
+      },
+      required: ["url", "selectors", "caption"],
+    },
+  },
 ];
 
 // --- EXECUTE TOOL ---
@@ -98,6 +122,20 @@ async function executeTool(env, name, args) {
         dismissCookies: args.dismiss_cookies !== false,
         quality: args.quality || 85,
         isMobile: true,
+      });
+
+    case "screenshot_api__annotate":
+      return captureAnnotated(env, {
+        url: args.url,
+        selectors: args.selectors,
+        caption: args.caption,
+        width: args.width || 1440,
+        height: args.height || 900,
+        scrollToSelector: args.scroll_to_selector || args.selectors[0],
+        delayMs: args.delay_ms ?? 3000,
+        dismissCookies: args.dismiss_cookies !== false,
+        quality: args.quality || 90,
+        padding: args.padding ?? 8,
       });
 
     default:
@@ -173,6 +211,115 @@ async function captureElement(env, opts) {
     const buf = await el.screenshot({ type: "jpeg", quality: opts.quality });
 
     return imageResult(buf, `Element \"${opts.selector}\" on ${opts.url}`);
+  } finally {
+    await browser.close();
+  }
+}
+
+async function captureAnnotated(env, opts) {
+  const browser = await puppeteer.launch(env.BROWSER);
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: opts.width, height: opts.height });
+
+    await page.goto(opts.url, { waitUntil: "networkidle0", timeout: 30000 });
+
+    if (opts.dismissCookies) await dismissCookieBanners(page);
+
+    if (opts.scrollToSelector) {
+      await page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (el) el.scrollIntoView({ block: "center" });
+      }, opts.scrollToSelector);
+    }
+
+    await sleep(opts.delayMs);
+
+    const annotationResult = await page.evaluate((selectors, caption, padding) => {
+      const RED = "rgb(217, 48, 37)";
+      const found = [];
+
+      const overlay = document.createElement("div");
+      overlay.id = "mcp-annotation-overlay";
+      overlay.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:999999;";
+      document.body.appendChild(overlay);
+
+      let lowestBottom = 0;
+      let leftmostLeft = Infinity;
+      let rightmostRight = 0;
+
+      for (const sel of selectors) {
+        const els = document.querySelectorAll(sel);
+        els.forEach((el) => {
+          const rect = el.getBoundingClientRect();
+          const scrollX = window.scrollX;
+          const scrollY = window.scrollY;
+
+          const box = document.createElement("div");
+          box.style.cssText = [
+            "position:absolute",
+            `top:${rect.top + scrollY - padding}px`,
+            `left:${rect.left + scrollX - padding}px`,
+            `width:${rect.width + padding * 2}px`,
+            `height:${rect.height + padding * 2}px`,
+            `border:4px solid ${RED}`,
+            "border-radius:8px",
+            "pointer-events:none",
+            "box-sizing:border-box",
+          ].join(";");
+          overlay.appendChild(box);
+
+          const bottom = rect.top + scrollY + rect.height + padding;
+          if (bottom > lowestBottom) lowestBottom = bottom;
+          const left = rect.left + scrollX - padding;
+          if (left < leftmostLeft) leftmostLeft = left;
+          const right = rect.left + scrollX + rect.width + padding;
+          if (right > rightmostRight) rightmostRight = right;
+
+          found.push(sel);
+        });
+      }
+
+      if (caption && found.length > 0) {
+        const label = document.createElement("div");
+        const captionWidth = rightmostRight - leftmostLeft;
+        label.style.cssText = [
+          "position:absolute",
+          `top:${lowestBottom + 12}px`,
+          `left:${leftmostLeft}px`,
+          `width:${captionWidth}px`,
+          `color:${RED}`,
+          "font-family:Helvetica,Arial,sans-serif",
+          "font-size:16px",
+          "font-weight:700",
+          "text-align:center",
+          "pointer-events:none",
+          "text-shadow:0 1px 3px rgba(255,255,255,0.9)",
+          "line-height:1.3",
+        ].join(";");
+        label.textContent = caption;
+        overlay.appendChild(label);
+      }
+
+      return { found, count: found.length };
+    }, opts.selectors, opts.caption, opts.padding);
+
+    if (annotationResult.count === 0) {
+      return {
+        content: [{ type: "text", text: `No elements found for selectors: ${opts.selectors.join(", ")}` }],
+        isError: true,
+      };
+    }
+
+    await sleep(300);
+
+    const buf = await page.screenshot({
+      type: "jpeg",
+      quality: opts.quality,
+      fullPage: false,
+    });
+
+    return imageResult(buf, `Annotated: ${opts.url} (${annotationResult.count} elements highlighted, caption: \"${opts.caption}\")`);
   } finally {
     await browser.close();
   }
