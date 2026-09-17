@@ -1,0 +1,10 @@
+name = "screenshot-mcp-server"
+main = "src/index.js"
+compatibility_date = "2026-09-17"
+compatibility_flags = ["nodejs_compat"]
+
+[browser]
+binding = "BROWSER"
+
+[vars]
+MCP_AUTH_TOKEN = "myMakeServer2026!"

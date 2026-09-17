@@ -1,0 +1,13 @@
+{
+  "name": "screenshot-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for capturing web page screenshots via Cloudflare Browser Run + Puppeteer",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^0.0.22"
+  }
+}
