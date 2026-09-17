@@ -6,5 +6,11 @@ compatibility_flags = ["nodejs_compat"]
 [browser]
 binding = "BROWSER"
 
+[ai]
+binding = "AI"
+
+[alias]
+playwright = "@cloudflare/playwright"
+
 [vars]
 MCP_AUTH_TOKEN = "myMakeServer2026!"
