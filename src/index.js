@@ -3,99 +3,34 @@ import { Stagehand } from "@browserbasehq/stagehand";
 import { endpointURLString } from "@cloudflare/playwright";
 import { WorkersAIClient } from "./workersAIClient";
 
-const SERVER_INFO = { name: "screenshot-api", version: "1.3.0" };
+const SERVER_INFO = { name: "screenshot-api", version: "1.4.0" };
 const PROTOCOL_VERSION = "2024-11-05";
 
 const TOOLS = [
   {
     name: "screenshot_api__capture",
     description: "Take a viewport screenshot of a web page. Returns a JPEG image as base64 plus a public URL. Default viewport is 1440x900 (desktop).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        url: { type: "string", description: "The URL to screenshot" },
-        width: { type: "number", description: "Viewport width in pixels (default: 1440)" },
-        height: { type: "number", description: "Viewport height in pixels (default: 900)" },
-        full_page: { type: "boolean", description: "Capture the full scrollable page (default: false)" },
-        wait_for_selector: { type: "string", description: "CSS selector to wait for before capturing" },
-        scroll_to_selector: { type: "string", description: "CSS selector to scroll into view before capturing" },
-        delay_ms: { type: "number", description: "Additional delay in ms after page load (default: 2500)" },
-        dismiss_cookies: { type: "boolean", description: "Dismiss cookie consent banners (default: true)" },
-        quality: { type: "number", description: "JPEG quality 1-100 (default: 85)" },
-      },
-      required: ["url"],
-    },
+    inputSchema: { type: "object", properties: { url: { type: "string", description: "The URL to screenshot" }, width: { type: "number", description: "Viewport width (default: 1440)" }, height: { type: "number", description: "Viewport height (default: 900)" }, full_page: { type: "boolean", description: "Full scrollable page (default: false)" }, wait_for_selector: { type: "string", description: "CSS selector to wait for" }, scroll_to_selector: { type: "string", description: "CSS selector to scroll to" }, delay_ms: { type: "number", description: "Delay after load (default: 2500)" }, dismiss_cookies: { type: "boolean", description: "Dismiss cookie banners (default: true)" }, quality: { type: "number", description: "JPEG quality (default: 85)" } }, required: ["url"] },
   },
   {
     name: "screenshot_api__capture_element",
     description: "Screenshot a specific element by CSS selector. Returns a cropped JPEG plus a public URL.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        url: { type: "string", description: "The URL containing the element" },
-        selector: { type: "string", description: "CSS selector of the element to capture" },
-        width: { type: "number", description: "Viewport width (default: 1440)" },
-        height: { type: "number", description: "Viewport height (default: 900)" },
-        delay_ms: { type: "number", description: "Delay after page load (default: 2500)" },
-        quality: { type: "number", description: "JPEG quality 1-100 (default: 85)" },
-      },
-      required: ["url", "selector"],
-    },
+    inputSchema: { type: "object", properties: { url: { type: "string", description: "The URL" }, selector: { type: "string", description: "CSS selector" }, width: { type: "number", description: "Viewport width (default: 1440)" }, height: { type: "number", description: "Viewport height (default: 900)" }, delay_ms: { type: "number", description: "Delay (default: 2500)" }, quality: { type: "number", description: "JPEG quality (default: 85)" } }, required: ["url", "selector"] },
   },
   {
     name: "screenshot_api__capture_mobile",
     description: "Mobile screenshot at 375x812 with 2x scale. Returns JPEG plus a public URL.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        url: { type: "string", description: "The URL to screenshot" },
-        full_page: { type: "boolean", description: "Full scrollable page (default: false)" },
-        wait_for_selector: { type: "string", description: "CSS selector to wait for" },
-        scroll_to_selector: { type: "string", description: "CSS selector to scroll to" },
-        delay_ms: { type: "number", description: "Delay after load (default: 2500)" },
-        dismiss_cookies: { type: "boolean", description: "Dismiss cookie banners (default: true)" },
-        quality: { type: "number", description: "JPEG quality (default: 85)" },
-      },
-      required: ["url"],
-    },
+    inputSchema: { type: "object", properties: { url: { type: "string", description: "The URL" }, full_page: { type: "boolean", description: "Full page (default: false)" }, wait_for_selector: { type: "string" }, scroll_to_selector: { type: "string" }, delay_ms: { type: "number", description: "Delay (default: 2500)" }, dismiss_cookies: { type: "boolean", description: "Dismiss cookies (default: true)" }, quality: { type: "number", description: "JPEG quality (default: 85)" } }, required: ["url"] },
   },
   {
     name: "screenshot_api__annotate",
-    description: "Screenshot with red box annotations around CSS-selected elements and a caption. Returns annotated JPEG plus a public URL.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        url: { type: "string", description: "The URL to annotate" },
-        selectors: { type: "array", items: { type: "string" }, description: "CSS selectors to highlight" },
-        caption: { type: "string", description: "Red caption text below the highlights" },
-        width: { type: "number", description: "Viewport width (default: 1440)" },
-        height: { type: "number", description: "Viewport height (default: 900)" },
-        scroll_to_selector: { type: "string", description: "Scroll target (default: first selector)" },
-        delay_ms: { type: "number", description: "Delay after load (default: 3000)" },
-        dismiss_cookies: { type: "boolean", description: "Dismiss cookie banners (default: true)" },
-        quality: { type: "number", description: "JPEG quality (default: 90)" },
-        padding: { type: "number", description: "Padding around elements (default: 8)" },
-      },
-      required: ["url", "selectors", "caption"],
-    },
+    description: "Screenshot with red box annotations around CSS-selected elements and a caption. Uses canvas overlay. Returns annotated JPEG plus a public URL.",
+    inputSchema: { type: "object", properties: { url: { type: "string", description: "The URL" }, selectors: { type: "array", items: { type: "string" }, description: "CSS selectors to highlight" }, caption: { type: "string", description: "Red caption text" }, width: { type: "number" }, height: { type: "number" }, scroll_to_selector: { type: "string" }, delay_ms: { type: "number" }, dismiss_cookies: { type: "boolean" }, quality: { type: "number" }, padding: { type: "number", description: "Padding (default: 8)" } }, required: ["url", "selectors", "caption"] },
   },
   {
     name: "screenshot_api__ai_annotate",
-    description: "Use AI to find elements described in plain English, draw red box annotations, and add a caption. Returns annotated JPEG plus a public URL.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        url: { type: "string", description: "The URL to screenshot" },
-        find: { type: "array", items: { type: "string" }, description: "Plain-English element descriptions, e.g. ['the navigation bar', 'the Get Started button']" },
-        caption: { type: "string", description: "Red caption text below the highlights" },
-        width: { type: "number", description: "Viewport width (default: 1440)" },
-        height: { type: "number", description: "Viewport height (default: 900)" },
-        delay_ms: { type: "number", description: "Delay after load (default: 3000)" },
-        quality: { type: "number", description: "JPEG quality (default: 90)" },
-        padding: { type: "number", description: "Padding around elements (default: 8)" },
-      },
-      required: ["url", "find", "caption"],
-    },
+    description: "Use AI to find elements described in plain English, draw red box annotations via canvas overlay, and add a caption banner. Returns annotated JPEG plus a public URL.",
+    inputSchema: { type: "object", properties: { url: { type: "string", description: "The URL" }, find: { type: "array", items: { type: "string" }, description: "Plain-English element descriptions" }, caption: { type: "string", description: "Red caption text" }, width: { type: "number" }, height: { type: "number" }, delay_ms: { type: "number" }, quality: { type: "number" }, padding: { type: "number", description: "Padding (default: 8)" } }, required: ["url", "find", "caption"] },
   },
 ];
 
@@ -128,7 +63,7 @@ async function captureScreenshot(env, opts) {
     if (opts.scrollToSelector) await page.evaluate((sel) => { const el = document.querySelector(sel); if (el) el.scrollIntoView({ block: "center" }); }, opts.scrollToSelector);
     await sleep(opts.delayMs);
     const buf = await page.screenshot({ type: "jpeg", quality: opts.quality, fullPage: opts.fullPage });
-    return await imageResult(env, buf, `${opts.url} at ${opts.width}x${opts.height}${opts.fullPage ? " (full page)" : ""}${opts.isMobile ? " (mobile)" : ""}`);
+    return await imageResult(env, buf, `${opts.url} at ${opts.width}x${opts.height}`);
   } finally { await browser.close(); }
 }
 
@@ -144,7 +79,7 @@ async function captureElement(env, opts) {
     await el.scrollIntoView();
     await sleep(500);
     const buf = await el.screenshot({ type: "jpeg", quality: opts.quality });
-    return await imageResult(env, buf, `Element \"${opts.selector}\" on ${opts.url}`);
+    return await imageResult(env, buf, `Element on ${opts.url}`);
   } finally { await browser.close(); }
 }
 
@@ -158,23 +93,66 @@ async function captureAnnotated(env, opts) {
     if (opts.scrollToSelector) await page.evaluate((sel) => { const el = document.querySelector(sel); if (el) el.scrollIntoView({ block: "center" }); }, opts.scrollToSelector);
     await sleep(opts.delayMs);
 
-    const count = await page.evaluate((selectors, padding) => {
-      let found = 0;
+    // Get bounding boxes for all matched elements
+    const boxes = await page.evaluate((selectors, padding) => {
+      const results = [];
       for (const sel of selectors) {
         document.querySelectorAll(sel).forEach((el) => {
-          el.style.setProperty('outline', `4px solid rgb(217, 48, 37)`, 'important');
-          el.style.setProperty('outline-offset', `${padding}px`, 'important');
-          el.style.setProperty('box-shadow', '0 0 0 4px rgba(217, 48, 37, 0.3)', 'important');
-          found++;
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            results.push({ x: rect.left - padding, y: rect.top - padding, w: rect.width + padding * 2, h: rect.height + padding * 2 });
+          }
         });
       }
-      return found;
+      return results;
     }, opts.selectors, opts.padding);
 
-    if (count === 0) return { content: [{ type: "text", text: `No elements found for selectors: ${opts.selectors.join(", ")}` }], isError: true };
+    if (boxes.length === 0) return { content: [{ type: "text", text: `No elements found` }], isError: true };
+
+    // Draw canvas overlay with red rectangles and caption
+    await page.evaluate((rects, caption, vw, vh) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = vw;
+      canvas.height = vh;
+      canvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2147483647;pointer-events:none;';
+      document.documentElement.appendChild(canvas);
+      const ctx = canvas.getContext('2d');
+
+      // Draw red rounded rectangles
+      ctx.strokeStyle = 'rgb(217, 48, 37)';
+      ctx.lineWidth = 4;
+      for (const r of rects) {
+        const radius = 8;
+        ctx.beginPath();
+        ctx.moveTo(r.x + radius, r.y);
+        ctx.lineTo(r.x + r.w - radius, r.y);
+        ctx.quadraticCurveTo(r.x + r.w, r.y, r.x + r.w, r.y + radius);
+        ctx.lineTo(r.x + r.w, r.y + r.h - radius);
+        ctx.quadraticCurveTo(r.x + r.w, r.y + r.h, r.x + r.w - radius, r.y + r.h);
+        ctx.lineTo(r.x + radius, r.y + r.h);
+        ctx.quadraticCurveTo(r.x, r.y + r.h, r.x, r.y + r.h - radius);
+        ctx.lineTo(r.x, r.y + radius);
+        ctx.quadraticCurveTo(r.x, r.y, r.x + radius, r.y);
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      // Draw caption banner at bottom
+      if (caption) {
+        const bannerH = 44;
+        ctx.fillStyle = 'rgb(217, 48, 37)';
+        ctx.fillRect(0, vh - bannerH, vw, bannerH);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 18px Helvetica, Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(caption, vw / 2, vh - bannerH / 2);
+      }
+    }, boxes, opts.caption, opts.width, opts.height);
+
     await sleep(300);
     const buf = await page.screenshot({ type: "jpeg", quality: opts.quality, fullPage: false });
-    return await imageResult(env, buf, `Annotated: ${opts.url} (${count} elements highlighted)`);
+    return await imageResult(env, buf, `Annotated: ${opts.url} (${boxes.length} elements)`);
   } finally { await browser.close(); }
 }
 
@@ -188,7 +166,8 @@ async function captureAIAnnotated(env, opts) {
     await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await sleep(opts.delayMs);
 
-    const foundSelectors = [];
+    // Use AI to find elements and get bounding boxes
+    const boxes = [];
     const seenSelectors = new Set();
     const notFound = [];
     for (const description of opts.find) {
@@ -199,44 +178,70 @@ async function captureAIAnnotated(env, opts) {
         if (!selector || seenSelectors.has(selector)) continue;
         try {
           const box = await page.locator(selector).boundingBox();
-          if (box && box.width > 0 && box.height > 0) { foundSelectors.push(selector); seenSelectors.add(selector); found = true; }
+          if (box && box.width > 0 && box.height > 0) {
+            boxes.push({ x: box.x - opts.padding, y: box.y - opts.padding, w: box.width + opts.padding * 2, h: box.height + opts.padding * 2 });
+            seenSelectors.add(selector);
+            found = true;
+          }
         } catch (_) {}
       }
       if (!found) notFound.push(description);
     }
 
-    if (foundSelectors.length === 0) {
-      const suffix = notFound.length ? `: ${notFound.join("; ")}` : "";
-      return { content: [{ type: "text", text: `No elements found for AI descriptions${suffix}` }], isError: true };
+    if (boxes.length === 0) {
+      return { content: [{ type: "text", text: `No elements found${notFound.length ? ': ' + notFound.join('; ') : ''}` }], isError: true };
     }
 
-    // Apply outline+box-shadow directly to elements (works through any z-index)
-    await page.evaluate(({ selectors, caption, padding }) => {
-      let count = 0;
-      for (const sel of selectors) {
-        try {
-          const el = document.querySelector(sel);
-          if (el) {
-            el.style.setProperty('outline', '4px solid rgb(217, 48, 37)', 'important');
-            el.style.setProperty('outline-offset', padding + 'px', 'important');
-            el.style.setProperty('box-shadow', '0 0 12px 4px rgba(217, 48, 37, 0.4)', 'important');
-            count++;
-          }
-        } catch (_) {}
+    // Draw canvas overlay with red rectangles and caption banner
+    await page.evaluate(({ rects, caption, vw, vh }) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = vw;
+      canvas.height = vh;
+      canvas.style.cssText = 'position:fixed;top:0;left:0;width:' + vw + 'px;height:' + vh + 'px;z-index:2147483647;pointer-events:none;';
+      document.documentElement.appendChild(canvas);
+      const ctx = canvas.getContext('2d');
+
+      // Draw red rounded rectangles
+      ctx.strokeStyle = 'rgb(217, 48, 37)';
+      ctx.lineWidth = 5;
+      ctx.shadowColor = 'rgba(217, 48, 37, 0.5)';
+      ctx.shadowBlur = 8;
+      for (const r of rects) {
+        const radius = 8;
+        ctx.beginPath();
+        ctx.moveTo(r.x + radius, r.y);
+        ctx.lineTo(r.x + r.w - radius, r.y);
+        ctx.quadraticCurveTo(r.x + r.w, r.y, r.x + r.w, r.y + radius);
+        ctx.lineTo(r.x + r.w, r.y + r.h - radius);
+        ctx.quadraticCurveTo(r.x + r.w, r.y + r.h, r.x + r.w - radius, r.y + r.h);
+        ctx.lineTo(r.x + radius, r.y + r.h);
+        ctx.quadraticCurveTo(r.x, r.y + r.h, r.x, r.y + r.h - radius);
+        ctx.lineTo(r.x, r.y + radius);
+        ctx.quadraticCurveTo(r.x, r.y, r.x + radius, r.y);
+        ctx.closePath();
+        ctx.stroke();
       }
 
-      // Add caption as a fixed banner at the bottom of the viewport
-      if (caption && count > 0) {
-        const banner = document.createElement('div');
-        banner.textContent = caption;
-        banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgb(217,48,37);color:white;font-family:Helvetica,Arial,sans-serif;font-size:18px;font-weight:700;text-align:center;padding:12px 20px;z-index:2147483647;letter-spacing:0.5px;';
-        document.body.appendChild(banner);
+      // Reset shadow for caption
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+
+      // Draw caption banner at bottom
+      if (caption) {
+        const bannerH = 48;
+        ctx.fillStyle = 'rgb(217, 48, 37)';
+        ctx.fillRect(0, vh - bannerH, vw, bannerH);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 20px Helvetica, Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(caption, vw / 2, vh - bannerH / 2);
       }
-    }, { selectors: foundSelectors, caption: opts.caption, padding: opts.padding });
+    }, { rects: boxes, caption: opts.caption, vw: opts.width, vh: opts.height });
 
     await sleep(500);
     const buf = await page.screenshot({ type: "jpeg", quality: opts.quality, fullPage: false });
-    return await imageResult(env, buf, `AI annotated: ${opts.url} (${foundSelectors.length} elements highlighted)`);
+    return await imageResult(env, buf, `AI annotated: ${opts.url} (${boxes.length} elements)`);
   } finally { if (stagehand) await stagehand.close(); }
 }
 
