@@ -12,5 +12,10 @@ binding = "AI"
 [alias]
 playwright = "@cloudflare/playwright"
 
+[[r2_buckets]]
+binding = "SCREENSHOTS"
+bucket_name = "screenshot-storage"
+
 [vars]
 MCP_AUTH_TOKEN = "myMakeServer2026!"
+PUBLIC_URL_BASE = "https://screenshot-mcp-server.adam-efc.workers.dev"
