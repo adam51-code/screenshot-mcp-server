@@ -3,7 +3,7 @@ import { Stagehand } from "@browserbasehq/stagehand";
 import { endpointURLString } from "@cloudflare/playwright";
 import { WorkersAIClient } from "./workersAIClient";
 
-const SERVER_INFO = { name: "screenshot-api", version: "1.4.0" };
+const SERVER_INFO = { name: "screenshot-api", version: "1.5.0" };
 const PROTOCOL_VERSION = "2024-11-05";
 
 const TOOLS = [
@@ -32,6 +32,25 @@ const TOOLS = [
     description: "Use AI to find elements described in plain English, draw red box annotations via canvas overlay, and add a caption banner. Returns annotated JPEG plus a public URL.",
     inputSchema: { type: "object", properties: { url: { type: "string", description: "The URL" }, find: { type: "array", items: { type: "string" }, description: "Plain-English element descriptions" }, caption: { type: "string", description: "Red caption text" }, width: { type: "number" }, height: { type: "number" }, delay_ms: { type: "number" }, quality: { type: "number" }, padding: { type: "number", description: "Padding (default: 8)" } }, required: ["url", "find", "caption"] },
   },
+  {
+    name: "screenshot_api__compare_layouts",
+    description: "Compare element positions between two web pages pixel-by-pixel. Opens both URLs at the same viewport, extracts bounding rectangles for all elements with IDs (scoped by optional CSS selectors), and returns a structured diff: which elements match, which are offset, by how many pixels, and in what direction. Use this to verify a page clone matches its original, then iterate fixes until the diff hits zero. Returns JSON with summary (verdict PASS/FAIL, counts, worst deltas) and up to 30 worst mismatches with exact pixel deltas.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reference_url: { type: "string", description: "The original/reference URL to compare against" },
+        test_url: { type: "string", description: "The duplicate/test URL to check" },
+        width: { type: "number", description: "Viewport width in pixels (default: 1920)" },
+        height: { type: "number", description: "Viewport height in pixels (default: 1080)" },
+        tolerance: { type: "number", description: "Pixel tolerance for position/size matching (default: 2). Elements within this threshold count as matching." },
+        reference_scope: { type: "string", description: "CSS selector to scope element extraction on the reference page (default: 'body'). Only elements with IDs inside this scope are compared." },
+        test_scope: { type: "string", description: "CSS selector to scope element extraction on the test page (default: 'body'). Useful for MCP-wrapped pages where content lives inside #lp-code-1." },
+        delay_ms: { type: "number", description: "Delay in ms after page load before measuring (default: 3000)" },
+        full_page: { type: "boolean", description: "Scroll the page first to trigger lazy loading, then measure from scroll position 0 (default: true)" },
+      },
+      required: ["reference_url", "test_url"],
+    },
+  },
 ];
 
 async function executeTool(env, name, args) {
@@ -46,10 +65,157 @@ async function executeTool(env, name, args) {
       return captureAnnotated(env, { url: args.url, selectors: args.selectors, caption: args.caption, width: args.width || 1440, height: args.height || 900, scrollToSelector: args.scroll_to_selector || args.selectors[0], delayMs: args.delay_ms ?? 3000, dismissCookies: args.dismiss_cookies !== false, quality: args.quality || 90, padding: args.padding ?? 8 });
     case "screenshot_api__ai_annotate":
       return captureAIAnnotated(env, { url: args.url, find: args.find, caption: args.caption, width: args.width ?? 1440, height: args.height ?? 900, delayMs: args.delay_ms ?? 3000, quality: args.quality ?? 90, padding: args.padding ?? 8 });
+    case "screenshot_api__compare_layouts":
+      return compareLayouts(env, args);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
 }
+
+/* ── Layout comparison ── */
+
+async function compareLayouts(env, opts) {
+  const width = opts.width || 1920;
+  const height = opts.height || 1080;
+  const tolerance = opts.tolerance ?? 2;
+  const refScope = opts.reference_scope || "body";
+  const testScope = opts.test_scope || "body";
+  const delayMs = opts.delay_ms ?? 3000;
+  const fullPage = opts.full_page !== false;
+
+  const browser = await puppeteer.launch(env.BROWSER);
+  try {
+    // Extract element rects from a single page, then close it
+    async function extractRects(url, scope) {
+      const page = await browser.newPage();
+      await page.setViewport({ width, height });
+      await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+      if (fullPage) await autoScroll(page);
+      await sleep(delayMs);
+      // Scroll back to top for consistent measurements
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await sleep(500);
+
+      const data = await page.evaluate((scopeSel) => {
+        const scopeEl = document.querySelector(scopeSel);
+        if (!scopeEl) return { error: "Scope selector not found: " + scopeSel };
+
+        const results = {};
+        scopeEl.querySelectorAll("[id]").forEach((el) => {
+          const id = el.id;
+          if (!id) return;
+          const rect = el.getBoundingClientRect();
+          // Skip zero-area elements (hidden, collapsed)
+          if (rect.width === 0 && rect.height === 0) return;
+          results[id] = {
+            x: Math.round(rect.left * 10) / 10,
+            y: Math.round(rect.top * 10) / 10,
+            w: Math.round(rect.width * 10) / 10,
+            h: Math.round(rect.height * 10) / 10,
+            tag: el.tagName.toLowerCase(),
+          };
+        });
+        return { elements: results, count: Object.keys(results).length };
+      }, scope);
+
+      await page.close();
+      return data;
+    }
+
+    // Run sequentially (CF browser rendering: one browser, sequential pages)
+    const refData = await extractRects(opts.reference_url, refScope);
+    if (refData.error) {
+      return { content: [{ type: "text", text: "Reference page error: " + refData.error }], isError: true };
+    }
+
+    const testData = await extractRects(opts.test_url, testScope);
+    if (testData.error) {
+      return { content: [{ type: "text", text: "Test page error: " + testData.error }], isError: true };
+    }
+
+    const refRects = refData.elements;
+    const testRects = testData.elements;
+    const refIds = Object.keys(refRects);
+    const testIds = Object.keys(testRects);
+    const commonIds = refIds.filter((id) => id in testRects);
+    const missingInTest = refIds.filter((id) => !(id in testRects));
+    const extraInTest = testIds.filter((id) => !(id in refRects));
+
+    const mismatches = [];
+    const matches = [];
+
+    for (const id of commonIds) {
+      const ref = refRects[id];
+      const test = testRects[id];
+      const dx = Math.round((test.x - ref.x) * 10) / 10;
+      const dy = Math.round((test.y - ref.y) * 10) / 10;
+      const dw = Math.round((test.w - ref.w) * 10) / 10;
+      const dh = Math.round((test.h - ref.h) * 10) / 10;
+      const maxDelta = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dw), Math.abs(dh));
+
+      if (maxDelta > tolerance) {
+        mismatches.push({ id, tag: ref.tag, ref, test, delta: { x: dx, y: dy, w: dw, h: dh }, max_delta: maxDelta });
+      } else {
+        matches.push(id);
+      }
+    }
+
+    // Sort worst offenders first
+    mismatches.sort((a, b) => b.max_delta - a.max_delta);
+
+    const summary = {
+      viewport: width + "x" + height,
+      tolerance_px: tolerance,
+      reference_url: opts.reference_url,
+      test_url: opts.test_url,
+      reference_scope: refScope,
+      test_scope: testScope,
+      reference_elements: refIds.length,
+      test_elements: testIds.length,
+      common_elements: commonIds.length,
+      pixel_perfect_matches: matches.length,
+      mismatched: mismatches.length,
+      missing_in_test: missingInTest.length,
+      extra_in_test: extraInTest.length,
+      verdict: mismatches.length === 0 && missingInTest.length === 0 ? "PASS" : "FAIL",
+    };
+
+    if (mismatches.length > 0) {
+      const xDeltas = mismatches.map((m) => Math.abs(m.delta.x));
+      const yDeltas = mismatches.map((m) => Math.abs(m.delta.y));
+      summary.worst_x_delta_px = Math.max(...xDeltas);
+      summary.worst_y_delta_px = Math.max(...yDeltas);
+      summary.avg_x_delta_px = Math.round((xDeltas.reduce((a, b) => a + b, 0) / xDeltas.length) * 10) / 10;
+      summary.avg_y_delta_px = Math.round((yDeltas.reduce((a, b) => a + b, 0) / yDeltas.length) * 10) / 10;
+    }
+
+    const result = { summary };
+
+    if (mismatches.length > 0) {
+      result.worst_mismatches = mismatches.slice(0, 30).map((m) => ({
+        element: "#" + m.id,
+        tag: m.tag,
+        reference_rect: "(" + m.ref.x + ", " + m.ref.y + ") " + m.ref.w + "x" + m.ref.h,
+        test_rect: "(" + m.test.x + ", " + m.test.y + ") " + m.test.w + "x" + m.test.h,
+        delta_px: "x:" + (m.delta.x > 0 ? "+" : "") + m.delta.x + " y:" + (m.delta.y > 0 ? "+" : "") + m.delta.y + " w:" + (m.delta.w > 0 ? "+" : "") + m.delta.w + " h:" + (m.delta.h > 0 ? "+" : "") + m.delta.h,
+        max_delta_px: m.max_delta,
+      }));
+    }
+
+    if (missingInTest.length > 0) {
+      result.missing_in_test = missingInTest.slice(0, 30);
+    }
+    if (extraInTest.length > 0) {
+      result.extra_in_test = extraInTest.slice(0, 30);
+    }
+
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  } finally {
+    await browser.close();
+  }
+}
+
+/* ── Existing screenshot tools ── */
 
 async function captureScreenshot(env, opts) {
   const browser = await puppeteer.launch(env.BROWSER);
@@ -93,7 +259,6 @@ async function captureAnnotated(env, opts) {
     if (opts.scrollToSelector) await page.evaluate((sel) => { const el = document.querySelector(sel); if (el) el.scrollIntoView({ block: "center" }); }, opts.scrollToSelector);
     await sleep(opts.delayMs);
 
-    // Get bounding boxes for all matched elements
     const boxes = await page.evaluate((selectors, padding) => {
       const results = [];
       for (const sel of selectors) {
@@ -107,9 +272,8 @@ async function captureAnnotated(env, opts) {
       return results;
     }, opts.selectors, opts.padding);
 
-    if (boxes.length === 0) return { content: [{ type: "text", text: `No elements found` }], isError: true };
+    if (boxes.length === 0) return { content: [{ type: "text", text: `No elements found for selectors: ${opts.selectors.join(", ")}` }], isError: true };
 
-    // Draw canvas overlay with red rectangles and caption
     await page.evaluate((rects, caption, vw, vh) => {
       const canvas = document.createElement('canvas');
       canvas.width = vw;
@@ -118,7 +282,6 @@ async function captureAnnotated(env, opts) {
       document.documentElement.appendChild(canvas);
       const ctx = canvas.getContext('2d');
 
-      // Draw red rounded rectangles
       ctx.strokeStyle = 'rgb(217, 48, 37)';
       ctx.lineWidth = 4;
       for (const r of rects) {
@@ -137,7 +300,6 @@ async function captureAnnotated(env, opts) {
         ctx.stroke();
       }
 
-      // Draw caption banner at bottom
       if (caption) {
         const bannerH = 44;
         ctx.fillStyle = 'rgb(217, 48, 37)';
@@ -166,7 +328,6 @@ async function captureAIAnnotated(env, opts) {
     await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await sleep(opts.delayMs);
 
-    // Use AI to find elements and get bounding boxes
     const boxes = [];
     const seenSelectors = new Set();
     const notFound = [];
@@ -192,7 +353,6 @@ async function captureAIAnnotated(env, opts) {
       return { content: [{ type: "text", text: `No elements found${notFound.length ? ': ' + notFound.join('; ') : ''}` }], isError: true };
     }
 
-    // Draw canvas overlay with red rectangles and caption banner
     await page.evaluate(({ rects, caption, vw, vh }) => {
       const canvas = document.createElement('canvas');
       canvas.width = vw;
@@ -201,7 +361,6 @@ async function captureAIAnnotated(env, opts) {
       document.documentElement.appendChild(canvas);
       const ctx = canvas.getContext('2d');
 
-      // Draw red rounded rectangles
       ctx.strokeStyle = 'rgb(217, 48, 37)';
       ctx.lineWidth = 5;
       ctx.shadowColor = 'rgba(217, 48, 37, 0.5)';
@@ -222,11 +381,9 @@ async function captureAIAnnotated(env, opts) {
         ctx.stroke();
       }
 
-      // Reset shadow for caption
       ctx.shadowColor = 'transparent';
       ctx.shadowBlur = 0;
 
-      // Draw caption banner at bottom
       if (caption) {
         const bannerH = 48;
         ctx.fillStyle = 'rgb(217, 48, 37)';
@@ -244,6 +401,8 @@ async function captureAIAnnotated(env, opts) {
     return await imageResult(env, buf, `AI annotated: ${opts.url} (${boxes.length} elements)`);
   } finally { if (stagehand) await stagehand.close(); }
 }
+
+/* ── Shared helpers ── */
 
 async function dismissCookieBanners(page) {
   for (const sel of ["#onetrust-accept-btn-handler",".cc-accept",".cc-dismiss",'[id*="cookie"] button[class*="accept"]','[class*="cookie"] button[class*="accept"]','[class*="consent"] button[class*="accept"]','button[aria-label*="Accept"]','button[aria-label*="accept"]','button[data-action="accept"]']) {
@@ -278,6 +437,8 @@ async function imageResult(env, buf, description) {
   if (publicUrl) textParts.push(`Public URL: ${publicUrl}`);
   return { content: [{ type: "image", data: base64, mimeType: "image/jpeg" }, { type: "text", text: textParts.join("\n") }] };
 }
+
+/* ── JSON-RPC router ── */
 
 function jsonrpc(id, result) { return { jsonrpc: "2.0", id, result }; }
 function jsonrpcError(id, code, message) { return { jsonrpc: "2.0", id, error: { code, message } }; }
